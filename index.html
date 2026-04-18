@@ -3,18 +3,266 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dashboard — Setting Up</title>
+  <title>Dashboard</title>
   <style>
-    body { font-family: system-ui, sans-serif; background: #070710; color: #e0e0f0; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-    .box { text-align: center; }
-    h1 { font-size: 2rem; background: linear-gradient(90deg,#7c6aff,#ff6ab0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 12px; }
-    p  { color: #888; font-size: 0.9rem; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #070710;
+      --surface: #0f0f1a;
+      --border: #1e1e35;
+      --border-hover: #5a4fff;
+      --text: #e0e0f0;
+      --muted: #6b6b90;
+      --accent: #7c6aff;
+      --green: #3ddc84;
+      --red: #ff5c5c;
+      --yellow: #ffd166;
+      --live: #ff5c5c;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #0d0d20 0%, #12122a 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(12px);
+    }
+    header h1 {
+      font-size: 1.35rem;
+      font-weight: 800;
+      background: linear-gradient(90deg, #7c6aff, #c56aff, #ff6ab0);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.5px;
+    }
+    .stamp { font-size: 0.72rem; color: var(--muted); }
+
+    /* ── Layout ── */
+    .wrap { max-width: 1380px; margin: 0 auto; padding: 28px 22px; }
+    .section { margin-bottom: 40px; }
+    .sec-head {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 16px;
+    }
+    .sec-icon { font-size: 1.1rem; }
+    .sec-title { font-size: 1rem; font-weight: 700; color: #fff; letter-spacing: -0.2px; }
+
+    /* ── Grid ── */
+    .grid-4 { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+    .grid-nba { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .card:hover { border-color: var(--border-hover); box-shadow: 0 0 20px rgba(124,106,255,0.08); }
+
+    /* ── Stock card ── */
+    .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+    .right-top { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+    .sym { font-size: 1.15rem; font-weight: 800; color: #fff; }
+    .sname { font-size: 0.68rem; color: var(--muted); margin-top: 2px; }
+    .price { font-size: 1.9rem; font-weight: 700; color: #fff; margin-bottom: 12px; letter-spacing: -1px; }
+    .price-sm { font-size: 0.9rem; font-weight: 600; color: #fff; }
+    .changes { display: flex; gap: 18px; margin-bottom: 10px; }
+    .chg { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+    .clbl { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .pos { color: var(--green); font-weight: 600; font-size: 0.82rem; }
+    .neg { color: var(--red); font-weight: 600; font-size: 0.82rem; }
+    .neu { color: var(--muted); font-weight: 600; font-size: 0.82rem; }
+    .reasoning { font-size: 0.74rem; color: #aaa; line-height: 1.55; padding-top: 10px; border-top: 1px solid var(--border); margin-top: 2px; }
+    .targets { display: flex; gap: 14px; margin-top: 8px; font-size: 0.73rem; color: var(--accent); }
+    .conf { font-size: 0.63rem; color: var(--muted); }
+    .entry { font-size: 0.74rem; color: var(--accent); margin-top: 8px; }
+
+    /* ── Badges ── */
+    .badge { padding: 3px 9px; border-radius: 20px; font-size: 0.65rem; font-weight: 800; letter-spacing: 0.6px; }
+    .abuy  { background: #0f2e1a; color: var(--green); border: 1px solid var(--green); }
+    .asell { background: #2e0f0f; color: var(--red);   border: 1px solid var(--red);   }
+    .ahold { background: #2e260a; color: var(--yellow); border: 1px solid var(--yellow); }
+
+    /* ── Outlook ── */
+    .outlook {
+      background: linear-gradient(135deg, #0d0d22, #141428);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 14px;
+      padding: 20px 24px;
+      font-size: 0.88rem;
+      color: #ccc;
+      line-height: 1.7;
+    }
+
+    /* ── News ── */
+    .news-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      text-decoration: none;
+      display: block;
+      transition: border-color 0.2s, transform 0.15s;
+    }
+    .news-card:hover { border-color: var(--border-hover); transform: translateY(-2px); }
+    .news-meta { font-size: 0.63rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 7px; }
+    .news-title { font-size: 0.84rem; color: #ddd; line-height: 1.45; }
+
+    /* ── NBA ── */
+    .game-card { padding: 14px 16px; }
+    .game-card.live { border-color: var(--live); box-shadow: 0 0 14px rgba(255,92,92,0.15); }
+    .team-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+    .tname { font-size: 0.88rem; color: #ddd; font-weight: 600; }
+    .tscore { font-size: 1.25rem; font-weight: 800; color: #fff; }
+    .gstatus { text-align: center; font-size: 0.68rem; color: var(--muted); padding: 5px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 5px 0; }
+    .live-dot { color: var(--live); font-size: 0.6rem; }
+    .empty { color: var(--muted); font-size: 0.85rem; padding: 18px 0; }
+
+    footer { text-align: center; font-size: 0.7rem; color: #333; padding: 24px 0 12px; border-top: 1px solid var(--border); margin-top: 12px; }
+
+    @media (max-width: 640px) {
+      .wrap { padding: 16px 12px; }
+      header { flex-direction: column; gap: 6px; text-align: center; }
+      .price { font-size: 1.5rem; }
+    }
   </style>
 </head>
 <body>
-  <div class="box">
-    <h1>⚡ Dashboard</h1>
-    <p>First update is running via GitHub Actions — check back in a minute!</p>
+
+<header>
+  <h1>⚡ Personal Dashboard</h1>
+  <div class="stamp">Updated Apr 18, 2026 · 02:21 AM · auto-refreshes every 5h</div>
+</header>
+
+<div class="wrap">
+
+  <!-- AI Market Outlook -->
+  <div class="section">
+    <div class="sec-head"><span class="sec-icon">🧠</span><span class="sec-title">AI Market Outlook</span></div>
+    <div class="outlook">Market analysis unavailable.</div>
   </div>
+
+  <!-- My Portfolio -->
+  <div class="section">
+    <div class="sec-head"><span class="sec-icon">💼</span><span class="sec-title">My Portfolio</span></div>
+    <div class="grid-4"></div>
+  </div>
+
+  <!-- AI Top Picks -->
+  <div class="section">
+    <div class="sec-head"><span class="sec-icon">🎯</span><span class="sec-title">AI Top Picks to Watch</span></div>
+    <div class="grid-3"></div>
+  </div>
+
+  <!-- Tech & AI News -->
+  <div class="section">
+    <div class="sec-head"><span class="sec-icon">💻</span><span class="sec-title">Tech &amp; AI News</span></div>
+    <div class="grid-3">
+        <a href="https://www.pymnts.com/artificial-intelligence-2/2026/openai-targets-pharma-giants-with-purpose-built-ai-model/" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">pymnts.com · 2m ago</div>
+          <div class="news-title">OpenAI Targets Pharma Giants With Purpose-Built AI Model</div>
+        </a>
+        <a href="https://socialnomics.net/2026/04/16/the-top-10-speaker-agencies-to-hire-a-keynote-speaker-with/" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">Socialnomics.net · 6m ago</div>
+          <div class="news-title">The Top 10 Speaker Agencies to Hire a Keynote Speaker With</div>
+        </a>
+        <a href="https://punchng.com/nigeria-needs-state-police-now-to-fight-insecurity-ondo-monarch/" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">The Punch · 7m ago</div>
+          <div class="news-title">Nigeria needs state police now to fight insecurity – Ondo monarch</div>
+        </a>
+        <a href="https://onefootball.com/en/news/is-that-you-muneco-the-viral-moment-of-the-night-in-libertadores-42723577" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">Onefootball.com · 24m ago</div>
+          <div class="news-title"> Is that you, Muñeco? The viral moment of the night in Libertadores</div>
+        </a>
+        <a href="https://slashdot.org/submission/17346534/us-to-create-high-tech-manufacturing-zone-in-philippines" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">Slashdot.org · 24m ago</div>
+          <div class="news-title">US To Create High-Tech Manufacturing Zone in Philippines</div>
+        </a>
+        <a href="https://economictimes.indiatimes.com/magazines/panache/i-need-a-place-i-can-call-home-bengaluru-woman-31-earning-rs-2-6-lakhs-per-month-wonders-if-she-can-afford-rs-2-3-crore-home/articleshow/130320566.cms" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">The Times of India · 33m ago</div>
+          <div class="news-title">'I need a place I can call home': Bengaluru woman, 31, earning Rs 2.6 lakhs per month, won…</div>
+        </a></div>
+  </div>
+
+  <!-- NBA Scores -->
+  <div class="section">
+    <div class="sec-head"><span class="sec-icon">🏀</span><span class="sec-title">NBA Scores</span></div>
+    <div class="grid-nba">
+            <div class="card game-card live">
+              <div class="team-row">
+                <span class="tname">CHA</span>
+                <span class="tscore">90</span>
+              </div>
+              <div class="gstatus"><span class="live-dot">●</span> 39.4 - 4th</div>
+              <div class="team-row">
+                <span class="tname">ORL</span>
+                <span class="tscore">119</span>
+              </div>
+            </div>
+            <div class="card game-card live">
+              <div class="team-row">
+                <span class="tname">GS</span>
+                <span class="tscore">2</span>
+              </div>
+              <div class="gstatus"><span class="live-dot">●</span> 10:01 - 1st</div>
+              <div class="team-row">
+                <span class="tname">PHX</span>
+                <span class="tscore">8</span>
+              </div>
+            </div></div>
+  </div>
+
+  <!-- Gaming News -->
+  <div class="section">
+    <div class="sec-head"><span class="sec-icon">🎮</span><span class="sec-title">Gaming News</span></div>
+    <div class="grid-3">
+        <a href="https://fuckingyoung.es/honey-dijons-the-nightlife-is-out-now/" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">Fuckingyoung.es · 2m ago</div>
+          <div class="news-title">Honey Dijon’s “The Nightlife” Is Out Now</div>
+        </a>
+        <a href="https://prtimes.jp/main/html/rd/p/000007305.000005397.html" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">Prtimes.jp · 23m ago</div>
+          <div class="news-title">『Football Manager 26』過去最大の40%OFFセール開催中！本日よりPC・Xboxで製品版を無料で楽しめるフリープレイイベント実施</div>
+        </a>
+        <a href="https://www.animenewsnetwork.com/news/2026-04-16/the-prince-of-tennis-romance-games-english-subtitled-remasters-slated-for-july-30/.236483" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">Anime News Network · 24m ago</div>
+          <div class="news-title">The Prince of Tennis Romance Games' English-Subtitled Remasters Slated for July 30</div>
+        </a>
+        <a href="https://www.tweaktown.com/news/111070/geforce-game-ready-driver-596-21-for-pragmata-and-windrose-is-here/index.html" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">TweakTown · 25m ago</div>
+          <div class="news-title">GeForce Game Ready Driver 596.21 for Pragmata and Windrose is here</div>
+        </a>
+        <a href="https://www.yankodesign.com/2026/04/16/vitalink-just-put-a-13-inch-screen-and-keyboard-into-one-foldable-slab/" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">Yanko Design · 35m ago</div>
+          <div class="news-title">VitaLink Just Put a 13-Inch Screen and Keyboard Into One Foldable Slab</div>
+        </a>
+        <a href="https://www.globenewswire.com/news-release/2026/04/17/3275927/0/en/Sihoo-Doro-C300-Pro-V2-Is-Now-Officially-Available-The-Next-Evolution-in-Full-Body-Adaptive-Ergonomics.html" target="_blank" rel="noopener" class="news-card">
+          <div class="news-meta">GlobeNewswire · 39m ago</div>
+          <div class="news-title">Sihoo Doro C300 Pro V2 Is Now Officially Available: The Next Evolution in Full-Body Adapti…</div>
+        </a></div>
+  </div>
+
+</div>
+
+<footer>Auto-updates every 5 hours via GitHub Actions &nbsp;·&nbsp; Powered by Claude AI</footer>
+
 </body>
 </html>
