@@ -1,93 +1,131 @@
 import os
-import json
 import yfinance as yf
 import requests
-from datetime import datetime, timedelta
-import anthropic
+from datetime import datetime
 
 PORTFOLIO = ['AAPL', 'TSLA', 'NVDA', 'SPY']
 WATCHLIST = ['MSFT', 'GOOGL', 'AMZN', 'META', 'AMD', 'PLTR', 'SMCI', 'NFLX', 'COIN', 'MSTR']
 
 
 def get_stock_data(symbols):
+    try:
+        raw = yf.download(symbols, period="1mo", progress=False, auto_adjust=True, group_by='ticker')
+    except Exception as e:
+        print(f"Batch download error: {e}")
+        return {}
+
     data = {}
     for symbol in symbols:
         try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1mo")
-            info = ticker.info
-            if len(hist) >= 2:
-                price = round(float(hist['Close'].iloc[-1]), 2)
-                change_1d = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100, 2)
-                idx_1w = max(-5, -len(hist))
-                change_1w = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[idx_1w]) / hist['Close'].iloc[idx_1w]) * 100, 2)
-                change_1m = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100, 2)
-                data[symbol] = {
-                    'price': price,
-                    'change_1d': float(change_1d),
-                    'change_1w': float(change_1w),
-                    'change_1m': float(change_1m),
-                    'volume': int(hist['Volume'].iloc[-1]),
-                    'name': info.get('longName', symbol),
-                }
+            hist = raw[symbol] if len(symbols) > 1 else raw
+            hist = hist.dropna(subset=['Close'])
+            if len(hist) < 2:
+                continue
+            price      = round(float(hist['Close'].iloc[-1]), 2)
+            change_1d  = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[-2])                  / hist['Close'].iloc[-2]) * 100, 2)
+            idx_1w     = max(-5, -len(hist))
+            change_1w  = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[idx_1w])              / hist['Close'].iloc[idx_1w]) * 100, 2)
+            change_1m  = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[0])                   / hist['Close'].iloc[0]) * 100, 2)
+            data[symbol] = {
+                'price': price,
+                'change_1d': float(change_1d),
+                'change_1w': float(change_1w),
+                'change_1m': float(change_1m),
+                'volume': int(hist['Volume'].iloc[-1]),
+            }
         except Exception as e:
-            print(f"Error fetching {symbol}: {e}")
+            print(f"Error parsing {symbol}: {e}")
     return data
 
 
-def get_ai_analysis(portfolio_data, watch_data):
-    client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
+def analyze_stocks(portfolio_data, watch_data):
+    """Rule-based buy/hold/sell signals — 100% free, no API needed."""
 
-    def summarize(d):
-        return {k: {'price': v['price'], '1d': f"{v['change_1d']}%", '1w': f"{v['change_1w']}%", '1m': f"{v['change_1m']}%"} for k, v in d.items()}
+    def signal(d):
+        c1d, c1w, c1m = d['change_1d'], d['change_1w'], d['change_1m']
+        # Strong uptrend → hold gains
+        if c1m > 20 and c1w < 0 and c1d < 0:
+            action = 'SELL'
+            reason = (f"Up {c1m:.1f}% this month but momentum is fading "
+                      f"({c1w:.1f}% this week, {c1d:.1f}% today). "
+                      "Consider locking in profits.")
+        # Deeply oversold — potential dip buy
+        elif c1m < -15 and c1w < -3:
+            action = 'BUY MORE'
+            reason = (f"Down {abs(c1m):.1f}% over the month and {abs(c1w):.1f}% this week. "
+                      "Historically oversold territory — could be a dip-buying opportunity "
+                      "if the broader market stabilises.")
+        # Strong momentum
+        elif c1d > 1 and c1w > 2 and c1m > 5:
+            action = 'BUY MORE'
+            reason = (f"Showing strong momentum: +{c1d:.1f}% today, +{c1w:.1f}% this week, "
+                      f"+{c1m:.1f}% this month. Trend is intact.")
+        else:
+            action = 'HOLD'
+            reason = (f"Relatively stable: {c1d:+.1f}% today, {c1w:+.1f}% this week, "
+                      f"{c1m:+.1f}% this month. No strong trigger to buy or sell right now.")
 
-    prompt = f"""You are a financial analyst. Based on this stock data give investment insights.
+        # Simple price targets based on recent momentum
+        weekly_avg = c1w / 5
+        target_1w = round(d['price'] * (1 + weekly_avg / 100), 2)
+        target_1m = round(d['price'] * (1 + c1m / 100 * 0.5), 2)
 
-PORTFOLIO (stocks I own): {json.dumps(summarize(portfolio_data))}
-WATCHLIST (stocks to consider): {json.dumps(summarize(watch_data))}
+        return {
+            'action': action,
+            'confidence': 'High' if abs(c1m) > 15 else ('Medium' if abs(c1m) > 7 else 'Low'),
+            'reasoning': reason,
+            'price_target_1w': target_1w,
+            'price_target_1m': target_1m,
+        }
 
-Return ONLY valid JSON with this exact structure:
-{{
-  "portfolio_analysis": {{
-    "SYMBOL": {{
-      "action": "BUY MORE" or "HOLD" or "SELL",
-      "confidence": "High" or "Medium" or "Low",
-      "reasoning": "2-3 sentence explanation",
-      "price_target_1w": number,
-      "price_target_1m": number
-    }}
-  }},
-  "top_picks": [
-    {{
-      "symbol": "SYMBOL",
-      "reasoning": "Why this is a good pick right now",
-      "entry_price": number
-    }}
-  ],
-  "market_outlook": "2-3 sentence overall market analysis"
-}}"""
+    portfolio_analysis = {sym: signal(d) for sym, d in portfolio_data.items()}
 
-    msg = client.messages.create(
-        model="claude-opus-4-7",
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    # Top picks: watchlist stocks with best risk/reward (sorted by 1-month change)
+    sorted_watch = sorted(watch_data.items(), key=lambda x: x[1]['change_1m'])
+    top_picks = []
+    for sym, d in sorted_watch:
+        if len(top_picks) >= 3:
+            break
+        c1m = d['change_1m']
+        if c1m < -10:
+            reason = (f"Down {abs(c1m):.1f}% over the past month — potential dip opportunity "
+                      f"if the sector recovers. Current price ${d['price']:,.2f}.")
+        elif d['change_1d'] > 1.5 and d['change_1w'] > 3:
+            reason = (f"Strong short-term momentum: +{d['change_1d']:.1f}% today and "
+                      f"+{d['change_1w']:.1f}% this week. Watch for a breakout.")
+        else:
+            reason = (f"{c1m:+.1f}% this month. Price action is worth monitoring "
+                      f"for an entry point near ${d['price']:,.2f}.")
+        top_picks.append({'symbol': sym, 'reasoning': reason, 'entry_price': d['price']})
 
-    text = msg.content[0].text
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start, end = text.find('{'), text.rfind('}') + 1
-        if start >= 0 and end > start:
-            return json.loads(text[start:end])
-        return {}
+    # Market outlook using SPY as proxy
+    spy = portfolio_data.get('SPY') or watch_data.get('SPY')
+    if spy:
+        m = spy['change_1m']
+        if m > 5:
+            outlook = (f"The broader market (SPY) is up {m:.1f}% over the past month, signalling "
+                       "a bullish environment. Risk-on assets and growth stocks tend to outperform "
+                       "in this backdrop. Stay invested but keep an eye on stretched valuations.")
+        elif m < -5:
+            outlook = (f"SPY is down {abs(m):.1f}% this month — the market is in a risk-off mode. "
+                       "Consider trimming high-beta positions, keeping cash ready for dip opportunities, "
+                       "and watching support levels closely before adding new positions.")
+        else:
+            outlook = (f"The market (SPY {m:+.1f}% this month) is in a consolidation phase. "
+                       "Mixed signals — be selective, focus on stocks with strong individual catalysts, "
+                       "and avoid chasing momentum in either direction.")
+    else:
+        outlook = ("Market data unavailable this cycle. Check back at the next update.")
+
+    return {'portfolio_analysis': portfolio_analysis, 'top_picks': top_picks, 'market_outlook': outlook}
 
 
 def get_news(api_key, query, count=6):
     try:
         resp = requests.get(
             "https://newsapi.org/v2/everything",
-            params={'q': query, 'sortBy': 'publishedAt', 'pageSize': count, 'language': 'en', 'apiKey': api_key},
+            params={'q': query, 'sortBy': 'publishedAt', 'pageSize': count,
+                    'language': 'en', 'apiKey': api_key},
             timeout=10,
         )
         if resp.status_code == 200:
@@ -153,10 +191,10 @@ def render_news_cards(articles):
     for a in articles[:6]:
         if not a.get('title') or a['title'] == '[Removed]':
             continue
-        title = a['title'][:90] + ('…' if len(a['title']) > 90 else '')
+        title  = a['title'][:90] + ('…' if len(a['title']) > 90 else '')
         source = a.get('source', {}).get('name', '')
-        url = a.get('url', '#')
-        ago = time_ago(a.get('publishedAt', ''))
+        url    = a.get('url', '#')
+        ago    = time_ago(a.get('publishedAt', ''))
         html += f'''
         <a href="{url}" target="_blank" rel="noopener" class="news-card">
           <div class="news-meta">{source}{' · ' + ago if ago else ''}</div>
@@ -165,27 +203,29 @@ def render_news_cards(articles):
     return html
 
 
-def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_games):
+def generate_html(portfolio_data, watch_data, analysis, tech_news, gaming_news, nba_games):
     now = datetime.now().strftime('%b %d, %Y · %I:%M %p')
 
     # ── Portfolio cards ───────────────────────────────────────────────────────
     portfolio_html = ''
     for sym, d in portfolio_data.items():
-        an = ai.get('portfolio_analysis', {}).get(sym, {})
+        an     = analysis.get('portfolio_analysis', {}).get(sym, {})
         action = an.get('action', 'HOLD')
-        ac = 'abuy' if 'BUY' in action else ('asell' if action == 'SELL' else 'ahold')
+        ac     = 'abuy' if 'BUY' in action else ('asell' if action == 'SELL' else 'ahold')
         targets = ''
         if an.get('price_target_1w'):
-            targets = f'<div class="targets"><span>1W est: <b>${an["price_target_1w"]}</b></span><span>1M est: <b>${an["price_target_1m"]}</b></span></div>'
+            targets = (f'<div class="targets">'
+                       f'<span>1W est: <b>${an["price_target_1w"]:,.2f}</b></span>'
+                       f'<span>1M est: <b>${an["price_target_1m"]:,.2f}</b></span>'
+                       f'</div>')
         reasoning = f'<div class="reasoning">{an["reasoning"]}</div>' if an.get('reasoning') else ''
-        conf = f'<span class="conf">{an["confidence"]} confidence</span>' if an.get('confidence') else ''
+        conf      = f'<span class="conf">{an["confidence"]} confidence</span>' if an.get('confidence') else ''
 
         portfolio_html += f'''
         <div class="card stock-card">
           <div class="card-top">
             <div>
               <div class="sym">{sym}</div>
-              <div class="sname">{d["name"][:32]}</div>
             </div>
             <div class="right-top">
               <div class="badge {ac}">{action}</div>
@@ -204,19 +244,23 @@ def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_ga
 
     # ── Top picks ─────────────────────────────────────────────────────────────
     picks_html = ''
-    for pick in ai.get('top_picks', [])[:3]:
-        sym = pick['symbol']
-        d = watch_data.get(sym, {})
+    for pick in analysis.get('top_picks', [])[:3]:
+        sym   = pick['symbol']
+        d     = watch_data.get(sym, {})
         price_str = f'${d["price"]:,.2f}' if d else ''
-        chg_html = ''
-        if d:
-            chg_html = f'<span class="{cls(d["change_1d"])}">{arrow(d["change_1d"])} {abs(d["change_1d"])}% today</span>'
-        entry = f'<div class="entry">Suggested entry: <b>${pick["entry_price"]}</b></div>' if pick.get('entry_price') else ''
+        chg_html  = (f'<span class="{cls(d["change_1d"])}">'
+                     f'{arrow(d["change_1d"])} {abs(d["change_1d"])}% today</span>') if d else ''
+        entry = (f'<div class="entry">Suggested entry: <b>${pick["entry_price"]:,.2f}</b></div>'
+                 if pick.get('entry_price') else '')
         picks_html += f'''
         <div class="card pick-card">
           <div class="card-top">
             <div class="sym">{sym}</div>
-            <div class="right-top"><span class="price-sm">{price_str}</span>{chg_html}<div class="badge abuy">BUY</div></div>
+            <div class="right-top">
+              <span class="price-sm">{price_str}</span>
+              {chg_html}
+              <div class="badge abuy">WATCH</div>
+            </div>
           </div>
           <div class="reasoning">{pick.get("reasoning", "")}</div>
           {entry}
@@ -243,7 +287,7 @@ def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_ga
     else:
         nba_html = '<div class="empty">No games scheduled today</div>'
 
-    outlook = ai.get('market_outlook', 'Market analysis unavailable.')
+    outlook = analysis.get('market_outlook', 'Market data unavailable.')
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -275,7 +319,6 @@ def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_ga
       min-height: 100vh;
     }}
 
-    /* ── Header ── */
     header {{
       background: linear-gradient(135deg, #0d0d20 0%, #12122a 100%);
       border-bottom: 1px solid var(--border);
@@ -298,22 +341,16 @@ def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_ga
     }}
     .stamp {{ font-size: 0.72rem; color: var(--muted); }}
 
-    /* ── Layout ── */
     .wrap {{ max-width: 1380px; margin: 0 auto; padding: 28px 22px; }}
     .section {{ margin-bottom: 40px; }}
-    .sec-head {{
-      display: flex; align-items: center; gap: 8px;
-      margin-bottom: 16px;
-    }}
+    .sec-head {{ display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }}
     .sec-icon {{ font-size: 1.1rem; }}
     .sec-title {{ font-size: 1rem; font-weight: 700; color: #fff; letter-spacing: -0.2px; }}
 
-    /* ── Grid ── */
-    .grid-4 {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }}
-    .grid-3 {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }}
+    .grid-4   {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }}
+    .grid-3   {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }}
     .grid-nba {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }}
 
-    /* ── Cards ── */
     .card {{
       background: var(--surface);
       border: 1px solid var(--border);
@@ -323,31 +360,27 @@ def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_ga
     }}
     .card:hover {{ border-color: var(--border-hover); box-shadow: 0 0 20px rgba(124,106,255,0.08); }}
 
-    /* ── Stock card ── */
-    .card-top {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }}
-    .right-top {{ display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }}
-    .sym {{ font-size: 1.15rem; font-weight: 800; color: #fff; }}
-    .sname {{ font-size: 0.68rem; color: var(--muted); margin-top: 2px; }}
-    .price {{ font-size: 1.9rem; font-weight: 700; color: #fff; margin-bottom: 12px; letter-spacing: -1px; }}
-    .price-sm {{ font-size: 0.9rem; font-weight: 600; color: #fff; }}
-    .changes {{ display: flex; gap: 18px; margin-bottom: 10px; }}
-    .chg {{ display: flex; flex-direction: column; align-items: center; gap: 3px; }}
-    .clbl {{ font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }}
-    .pos {{ color: var(--green); font-weight: 600; font-size: 0.82rem; }}
-    .neg {{ color: var(--red); font-weight: 600; font-size: 0.82rem; }}
-    .neu {{ color: var(--muted); font-weight: 600; font-size: 0.82rem; }}
+    .card-top   {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }}
+    .right-top  {{ display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }}
+    .sym        {{ font-size: 1.15rem; font-weight: 800; color: #fff; }}
+    .price      {{ font-size: 1.9rem; font-weight: 700; color: #fff; margin-bottom: 12px; letter-spacing: -1px; }}
+    .price-sm   {{ font-size: 0.9rem; font-weight: 600; color: #fff; }}
+    .changes    {{ display: flex; gap: 18px; margin-bottom: 10px; }}
+    .chg        {{ display: flex; flex-direction: column; align-items: center; gap: 3px; }}
+    .clbl       {{ font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }}
+    .pos  {{ color: var(--green);  font-weight: 600; font-size: 0.82rem; }}
+    .neg  {{ color: var(--red);    font-weight: 600; font-size: 0.82rem; }}
+    .neu  {{ color: var(--muted);  font-weight: 600; font-size: 0.82rem; }}
     .reasoning {{ font-size: 0.74rem; color: #aaa; line-height: 1.55; padding-top: 10px; border-top: 1px solid var(--border); margin-top: 2px; }}
-    .targets {{ display: flex; gap: 14px; margin-top: 8px; font-size: 0.73rem; color: var(--accent); }}
-    .conf {{ font-size: 0.63rem; color: var(--muted); }}
-    .entry {{ font-size: 0.74rem; color: var(--accent); margin-top: 8px; }}
+    .targets   {{ display: flex; gap: 14px; margin-top: 8px; font-size: 0.73rem; color: var(--accent); }}
+    .conf      {{ font-size: 0.63rem; color: var(--muted); }}
+    .entry     {{ font-size: 0.74rem; color: var(--accent); margin-top: 8px; }}
 
-    /* ── Badges ── */
     .badge {{ padding: 3px 9px; border-radius: 20px; font-size: 0.65rem; font-weight: 800; letter-spacing: 0.6px; }}
-    .abuy  {{ background: #0f2e1a; color: var(--green); border: 1px solid var(--green); }}
-    .asell {{ background: #2e0f0f; color: var(--red);   border: 1px solid var(--red);   }}
-    .ahold {{ background: #2e260a; color: var(--yellow); border: 1px solid var(--yellow); }}
+    .abuy  {{ background: #0f2e1a; color: var(--green);  border: 1px solid var(--green); }}
+    .asell {{ background: #2e0f0f; color: var(--red);    border: 1px solid var(--red);   }}
+    .ahold {{ background: #2e260a; color: var(--yellow); border: 1px solid var(--yellow);}}
 
-    /* ── Outlook ── */
     .outlook {{
       background: linear-gradient(135deg, #0d0d22, #141428);
       border: 1px solid var(--border);
@@ -359,7 +392,6 @@ def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_ga
       line-height: 1.7;
     }}
 
-    /* ── News ── */
     .news-card {{
       background: var(--surface);
       border: 1px solid var(--border);
@@ -370,18 +402,17 @@ def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_ga
       transition: border-color 0.2s, transform 0.15s;
     }}
     .news-card:hover {{ border-color: var(--border-hover); transform: translateY(-2px); }}
-    .news-meta {{ font-size: 0.63rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 7px; }}
+    .news-meta  {{ font-size: 0.63rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 7px; }}
     .news-title {{ font-size: 0.84rem; color: #ddd; line-height: 1.45; }}
 
-    /* ── NBA ── */
     .game-card {{ padding: 14px 16px; }}
     .game-card.live {{ border-color: var(--live); box-shadow: 0 0 14px rgba(255,92,92,0.15); }}
-    .team-row {{ display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }}
-    .tname {{ font-size: 0.88rem; color: #ddd; font-weight: 600; }}
-    .tscore {{ font-size: 1.25rem; font-weight: 800; color: #fff; }}
-    .gstatus {{ text-align: center; font-size: 0.68rem; color: var(--muted); padding: 5px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 5px 0; }}
-    .live-dot {{ color: var(--live); font-size: 0.6rem; }}
-    .empty {{ color: var(--muted); font-size: 0.85rem; padding: 18px 0; }}
+    .team-row  {{ display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }}
+    .tname     {{ font-size: 0.88rem; color: #ddd; font-weight: 600; }}
+    .tscore    {{ font-size: 1.25rem; font-weight: 800; color: #fff; }}
+    .gstatus   {{ text-align: center; font-size: 0.68rem; color: var(--muted); padding: 5px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 5px 0; }}
+    .live-dot  {{ color: var(--live); font-size: 0.6rem; }}
+    .empty     {{ color: var(--muted); font-size: 0.85rem; padding: 18px 0; }}
 
     footer {{ text-align: center; font-size: 0.7rem; color: #333; padding: 24px 0 12px; border-top: 1px solid var(--border); margin-top: 12px; }}
 
@@ -401,37 +432,31 @@ def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_ga
 
 <div class="wrap">
 
-  <!-- AI Market Outlook -->
   <div class="section">
-    <div class="sec-head"><span class="sec-icon">🧠</span><span class="sec-title">AI Market Outlook</span></div>
+    <div class="sec-head"><span class="sec-icon">📈</span><span class="sec-title">Market Outlook</span></div>
     <div class="outlook">{outlook}</div>
   </div>
 
-  <!-- My Portfolio -->
   <div class="section">
     <div class="sec-head"><span class="sec-icon">💼</span><span class="sec-title">My Portfolio</span></div>
     <div class="grid-4">{portfolio_html}</div>
   </div>
 
-  <!-- AI Top Picks -->
   <div class="section">
-    <div class="sec-head"><span class="sec-icon">🎯</span><span class="sec-title">AI Top Picks to Watch</span></div>
+    <div class="sec-head"><span class="sec-icon">🎯</span><span class="sec-title">Stocks to Watch</span></div>
     <div class="grid-3">{picks_html}</div>
   </div>
 
-  <!-- Tech & AI News -->
   <div class="section">
     <div class="sec-head"><span class="sec-icon">💻</span><span class="sec-title">Tech &amp; AI News</span></div>
     <div class="grid-3">{render_news_cards(tech_news)}</div>
   </div>
 
-  <!-- NBA Scores -->
   <div class="section">
     <div class="sec-head"><span class="sec-icon">🏀</span><span class="sec-title">NBA Scores</span></div>
     <div class="grid-nba">{nba_html}</div>
   </div>
 
-  <!-- Gaming News -->
   <div class="section">
     <div class="sec-head"><span class="sec-icon">🎮</span><span class="sec-title">Gaming News</span></div>
     <div class="grid-3">{render_news_cards(gaming_news)}</div>
@@ -439,7 +464,7 @@ def generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_ga
 
 </div>
 
-<footer>Auto-updates every 5 hours via GitHub Actions &nbsp;·&nbsp; Powered by Claude AI</footer>
+<footer>Auto-updates every 5 hours via GitHub Actions &nbsp;·&nbsp; 100% free</footer>
 
 </body>
 </html>'''
@@ -454,30 +479,25 @@ def main():
     print("Fetching watchlist data...")
     watch_data = get_stock_data(WATCHLIST)
 
-    print("Running AI analysis...")
-    ai = {}
-    if os.environ.get('ANTHROPIC_API_KEY'):
-        try:
-            ai = get_ai_analysis(portfolio_data, watch_data)
-        except Exception as e:
-            print(f"AI analysis failed: {e}")
+    print("Running trend analysis...")
+    analysis = analyze_stocks(portfolio_data, watch_data)
 
     print("Fetching news...")
     tech_news, gaming_news = [], []
     if newsapi_key:
-        tech_news = get_news(newsapi_key, 'artificial intelligence OR AI OR technology', 6)
+        tech_news   = get_news(newsapi_key, 'artificial intelligence OR AI OR technology', 6)
         gaming_news = get_news(newsapi_key, 'gaming OR "video games" OR esports OR PlayStation OR Xbox', 6)
 
     print("Fetching NBA scores...")
     nba_games = get_nba_scores()
 
     print("Generating index.html...")
-    html = generate_html(portfolio_data, watch_data, ai, tech_news, gaming_news, nba_games)
+    html = generate_html(portfolio_data, watch_data, analysis, tech_news, gaming_news, nba_games)
 
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(html)
 
-    print("Done! Dashboard saved to index.html")
+    print("Done!")
 
 
 if __name__ == '__main__':

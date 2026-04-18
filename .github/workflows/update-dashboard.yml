@@ -26,7 +26,6 @@ jobs:
       - name: Generate dashboard
         env:
           NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python scripts/generate_dashboard.py
 
       - name: Commit & push updated dashboard
